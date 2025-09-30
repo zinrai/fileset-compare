@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-
 """
 fileset-compare: Compare file lists across multiple directories with name normalization.
 
 This tool compares files across multiple directories based on their base names
-(filename without extension), applying flexible string replacement rules to
+(filename without extension), applying string replacement rules to
 normalize file names before comparison.
 """
 
@@ -25,14 +24,20 @@ class MatchReplaceAction(argparse.Action):
         if option_string == "--match":
             # Add new match entry
             namespace.replacements.append({"match": values, "replace": None})
-        elif option_string == "--replace":
-            # Validate that there's a pending match
-            if not namespace.replacements:
-                parser.error("--replace must be preceded by --match")
-            if namespace.replacements[-1]["replace"] is not None:
-                parser.error("--replace must follow its corresponding --match")
-            # Complete the pair
-            namespace.replacements[-1]["replace"] = values
+            return
+
+        if option_string != "--replace":
+            return
+
+        # Handle --replace option
+        if not namespace.replacements:
+            parser.error("--replace must be preceded by --match")
+
+        if namespace.replacements[-1]["replace"] is not None:
+            parser.error("--replace must follow its corresponding --match")
+
+        # Complete the pair
+        namespace.replacements[-1]["replace"] = values
 
 
 def normalize_filename(filename: str, replacements: List[Dict[str, str]]) -> str:
@@ -67,7 +72,8 @@ def should_exclude(path: Path, exclude_patterns: List[str]) -> bool:
     """
     if not exclude_patterns:
         return False
-        path_str = str(path)
+
+    path_str = str(path)
     for pattern in exclude_patterns:
         if pattern in path_str:
             return True
@@ -124,6 +130,27 @@ def collect_files(
     return normalized_names
 
 
+def find_directories_containing_file(
+    filename: str, dir_filesets: Dict[str, Set[str]]
+) -> Tuple[str, ...]:
+    """
+    Find which directories contain the given filename.
+
+    Args:
+        filename: The filename to search for
+        dir_filesets: Dictionary mapping directory paths to their file sets
+
+    Returns:
+        Tuple of directory paths that contain the filename
+    """
+    present_in_list = []
+    for directory in dir_filesets.keys():
+        if filename not in dir_filesets[directory]:
+            continue
+        present_in_list.append(directory)
+    return tuple(present_in_list)
+
+
 def compare_filesets(
     dir_filesets: Dict[str, Set[str]],
 ) -> Dict[Tuple[str, ...], List[str]]:
@@ -142,16 +169,31 @@ def compare_filesets(
     # Categorize files by which directories they appear in
     results = {}
     for filename in all_files:
-        # Find which directories contain this file
-        present_in = tuple(
-            d for d in dir_filesets.keys() if filename in dir_filesets[d]
-        )
+        present_in = find_directories_containing_file(filename, dir_filesets)
 
         if present_in not in results:
             results[present_in] = []
         results[present_in].append(filename)
 
     return results
+
+
+def sort_key_for_results(item):
+    """
+    Sort key function for results.
+
+    Sorts by:
+    1. Number of directories (ascending)
+    2. Directory names (alphabetically)
+
+    Args:
+        item: Tuple of (directories_tuple, files_list)
+
+    Returns:
+        Tuple used as sort key
+    """
+    dirs, files = item
+    return (len(dirs), dirs)
 
 
 def format_output(results: Dict[Tuple[str, ...], List[str]], dir_count: int):
@@ -163,11 +205,14 @@ def format_output(results: Dict[Tuple[str, ...], List[str]], dir_count: int):
         dir_count: Total number of directories being compared
     """
     # Sort results by number of directories (ascending), then by directory names
-    sorted_results = sorted(results.items(), key=lambda x: (len(x[0]), x[0]))
+    sorted_results = sorted(results.items(), key=sort_key_for_results)
 
     for dirs, files in sorted_results:
-        # Create human-readable directory names
-        dir_names = ", ".join([Path(d).name for d in dirs])
+        # Create directory names list
+        dir_name_list = []
+        for d in dirs:
+            dir_name_list.append(Path(d).name)
+        dir_names = ", ".join(dir_name_list)
 
         # Determine the header text
         if len(dirs) == 1:
@@ -194,13 +239,14 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace):
     if len(args.dir) < 2:
         parser.error("At least 2 directories must be specified")
 
-    # Validate that all match entries have corresponding replace
-    if hasattr(args, "replacements"):
-        for rule in args.replacements:
-            if rule["replace"] is None:
-                parser.error(f'--match "{rule["match"]}" is missing its --replace')
-    else:
+    # Initialize replacements if not set
+    if not hasattr(args, "replacements"):
         args.replacements = []
+
+    # Validate that all match entries have corresponding replace
+    for rule in args.replacements:
+        if rule["replace"] is None:
+            parser.error(f'--match "{rule["match"]}" is missing its --replace')
 
     # Initialize exclude_patterns if not set
     if not hasattr(args, "exclude") or args.exclude is None:
@@ -241,7 +287,7 @@ def main():
         "--exclude",
         action="append",
         metavar="PATTERN",
-        help="Exclude paths matching pattern (can speciy multiple times)",
+        help="Exclude paths matching pattern (can specify multiple times)",
     )
 
     parser.add_argument(
@@ -270,7 +316,7 @@ def main():
             print(f"  '{rule['match']}' -> '{rule['replace']}'")
 
     if args.exclude:
-        print(f"\nExclusion patterns ({len(args.exclude)}):")
+        pint(f"\nExclusion patterns ({len(args.exclude)}):")
         for pattern in args.exclude:
             print(f"  - {pattern}")
 
