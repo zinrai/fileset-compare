@@ -1,4 +1,4 @@
-# fileset-ompare
+# fileset-compare
 
 A command-line tool to compare file lists across multiple directories with name normalization.
 
